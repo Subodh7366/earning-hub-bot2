@@ -9,8 +9,11 @@
     "numReplicas": 1,
     "sleepApplication": false,
     "useLegacyStacker": false,
-    "ipv6EgressEnabled": false,
+    "ipv6EgressEnabled": true,
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
+  },
+  "service": {
+    "type": "WORKER"
   }
 }
