@@ -144,7 +144,7 @@ def handle_menu(message):
 def run_spin_logic(chat_id, user_id):
     spins = users_db[user_id]['spins']
     if spins > 0:
-        win_amount = random.choice([4, 5,])
+        win_amount = random.choice([4, 5, 6 ])
         users_db[user_id]['balance'] += win_amount
         users_db[user_id]['spins'] -= 1
         
