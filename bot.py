@@ -28,7 +28,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 users_db = {} 
 
 # --- MEMORY TEMPORARY STORAGE FOR WITHDRAWAL STATES ---
-withdraw_state = {} # Format: { user_id: { 'upi': None } }
+withdraw_state = {} 
 
 # --- HELPER FUNCTIONS ---
 def check_membership(user_id):
@@ -132,7 +132,7 @@ def handle_menu(message):
         return
 
     if message.text == "🎰 Spin and Win":
-        run_spin_logic(message.chat.id, user_id)
+        run_spin_logic(message.chat.id, user_id, is_inline=False, message_obj=message)
 
     elif message.text == "💰 Wallet":
         show_wallet_logic(message.chat.id, user_id)
@@ -141,10 +141,15 @@ def handle_menu(message):
         show_invite_logic(message.chat.id, user_id)
 
 # --- CORE LOGIC FUNCTIONS ---
-def run_spin_logic(chat_id, user_id):
+def run_spin_logic(chat_id, user_id, is_inline=False, callback_id=None, message_obj=None):
+    # Ensure user exists in db
+    if user_id not in users_db:
+        users_db[user_id] = {'balance': 0, 'spins': 0, 'referred_by': None, 'verified': True}
+        
     spins = users_db[user_id]['spins']
+    
     if spins > 0:
-        win_amount = random.choice([4, 5, 6 ])
+        win_amount = random.choice([4, 5, 6])
         users_db[user_id]['balance'] += win_amount
         users_db[user_id]['spins'] -= 1
         
@@ -158,13 +163,21 @@ def run_spin_logic(chat_id, user_id):
             parse_mode="Markdown"
         )
     else:
-        bot.send_message(chat_id, "❌ **Oops! Aapke paas spins nahi hain.**\n\n👥 Apne dosto ko invite karein aur har referral par **1 Free Spin** paayein!", parse_mode="Markdown")
+        # FIX: Agar 0 spins hain toh response clear dene ke liye alert aur direct message ka system
+        warning_text = "❌ Oops! Aapke paas spins nahi hain.\n\n👥 Apne dosto ko invite karein aur free spin paayein!"
+        
+        if is_inline and callback_id:
+            bot.answer_callback_query(callback_id, "❌ Aapke paas 0 spins hain! Friends ko invite karein.", show_alert=True)
+        
+        bot.send_message(chat_id, warning_text, parse_mode="Markdown")
 
 def show_wallet_logic(chat_id, user_id):
-    balance = users_db.get(user_id, {}).get('balance', 0)
-    spins = users_db.get(user_id, {}).get('spins', 0)
+    if user_id not in users_db:
+        users_db[user_id] = {'balance': 0, 'spins': 0, 'referred_by': None, 'verified': True}
+        
+    balance = users_db[user_id]['balance']
+    spins = users_db[user_id]['spins']
     
-    # FIX: Button hamesha show hoga niche text ke, chahe balance kam hi kyu na ho!
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("💸 Withdraw Request", callback_data="request_withdraw"))
         
@@ -173,7 +186,7 @@ def show_wallet_logic(chat_id, user_id):
         f"💳 **MY LIVE WALLET** 💳\n\n"
         f"💵 Current Balance: **₹{balance}**\n"
         f"🎰 Available Spins: **{spins}**\n\n"
-        f"⚠️ *Note: Minimum withdrawal amount ₹20 hai.*", 
+        f"⚠️ *Note: Minimum withdrawal amount threshold ₹20 hai.*", 
         parse_mode="Markdown", 
         reply_markup=markup
     )
@@ -200,19 +213,22 @@ def handle_callbacks(call):
         if not check_membership(user_id):
             bot.answer_callback_query(call.id, "❌ Verification Required!", show_alert=True)
             return
-        bot.delete_message(call.message.chat.id, call.message.message_id)
-        run_spin_logic(call.message.chat.id, user_id)
+        
+        spins = users_db.get(user_id, {}).get('spins', 0)
+        if spins > 0:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+            run_spin_logic(call.message.chat.id, user_id, is_inline=True, callback_id=call.id)
+        else:
+            run_spin_logic(call.message.chat.id, user_id, is_inline=True, callback_id=call.id)
         
     elif call.data == "request_withdraw":
         balance = users_db.get(user_id, {}).get('balance', 0)
         
-        # 1. Check agar minimum balance ₹20 se kam hai
         if balance < 20:
             bot.answer_callback_query(call.id, f"❌ Aapka balance ₹{balance} hai. Minimum withdrawal ₹20 hona chahiye!", show_alert=True)
             return
             
         bot.answer_callback_query(call.id)
-        # 2. Agar ₹20 se upar hai, toh UPI ID maango
         msg = bot.send_message(call.message.chat.id, "📩 **⚡ INSTANT WITHDRAWAL (Step 1/2)** ⚡\n\nApni **UPI ID** enter karein:\n_(Jaise: example@upi ya 9876543210@paytm)_", parse_mode="Markdown")
         bot.register_next_step_handler(msg, process_upi_step)
 
@@ -237,7 +253,6 @@ def handle_callbacks(call):
             except: pass
             bot.edit_message_text(f"❌ User `{target_user_id}` ki ₹{amount} ki request reject kar di gayi.", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
 
-# Step 1: Handle UPI ID Input
 def process_upi_step(message):
     user_id = message.from_user.id
     upi_id = message.text.strip()
@@ -246,14 +261,10 @@ def process_upi_step(message):
         bot.send_message(message.chat.id, "❌ Withdrawal cancelled.")
         return
 
-    # Temporarily save UPI ID
     withdraw_state[user_id] = {'upi': upi_id}
-    
-    # Now ask for Amount
     msg = bot.send_message(message.chat.id, "💰 **⚡ INSTANT WITHDRAWAL (Step 2/2)** ⚡\n\nJitna **Amount (Paise)** nikalna hai woh enter karein:\n_(Note: Amount kam se kam ₹20 hona chahiye)_", parse_mode="Markdown")
     bot.register_next_step_handler(msg, process_amount_step)
 
-# Step 2: Handle Amount Input & Submit to Admin
 def process_amount_step(message):
     user_id = message.from_user.id
     amount_text = message.text.strip()
@@ -263,26 +274,22 @@ def process_amount_step(message):
         bot.send_message(message.chat.id, "❌ Withdrawal cancelled.")
         return
 
-    # Check validity of amount digits
     if not amount_text.isdigit():
-        bot.send_message(message.chat.id, "❌ **Galat Amount!** Sirf numbers daalein (Jaise: 25, 50, 100). Please fir se apply karein.")
+        bot.send_message(message.chat.id, "❌ **Galat Amount!** Sirf numbers daalein. Please fir se apply karein.")
         return
         
     amount = int(amount_text)
     
-    # Validation 1: Check if amount is less than 20
     if amount < 20:
         bot.send_message(message.chat.id, "❌ **Error:** Minimum withdrawal amount ₹20 hona chahiye. Please fir se apply karein.")
         return
         
-    # Validation 2: Check if user has enough balance
     if amount > balance:
-        bot.send_message(message.chat.id, f"❌ **Insufficient Balance!** Aapka balance sirf ₹{balance} hai aur aap ₹{amount} nikal rahe hain. Please fir se try karein.")
+        bot.send_message(message.chat.id, f"❌ **Insufficient Balance!** Aapka balance sirf ₹{balance} hai. Please fir se try karein.")
         return
 
     upi_id = withdraw_state.get(user_id, {}).get('upi', 'Not Found')
 
-    # Send Notification to ADMIN with amount and UPI ID
     admin_markup = types.InlineKeyboardMarkup()
     admin_markup.add(
         types.InlineKeyboardButton("✅ Approve & Deduct", callback_data=f"wd_approve_{user_id}_{amount}"),
