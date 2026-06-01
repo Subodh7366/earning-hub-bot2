@@ -27,6 +27,7 @@ CHANNELS = [
 bot = telebot.TeleBot(BOT_TOKEN)
 users_db = {} 
 
+# --- HELPER FUNCTIONS ---
 def check_membership(user_id):
     for channel in CHANNELS:
         try:
@@ -45,6 +46,8 @@ def get_main_keyboard():
     markup.add(btn_spin)
     markup.add(btn_wallet, btn_invite)
     return markup
+
+# --- HANDLERS ---
 
 @bot.message_handler(commands=['start'])
 def start_command(message):
@@ -67,21 +70,24 @@ def start_command(message):
         ref = users_db[user_id]['referred_by']
         if ref and ref in users_db and not users_db[user_id]['verified']:
             users_db[ref]['spins'] += 1
-            bot.send_message(ref, "🎉 Aapke referral ne join kiya! Aapko 1 free spin mila.")
-        bot.send_message(message.chat.id, "👋 Welcome back to Earning Hub Bot!", reply_markup=get_main_keyboard())
+            try: bot.send_message(ref, "🎉 **Notification:** Aapke referral ne join kiya! Aapko **1 Free Spin** mila. 🎰", parse_mode="Markdown")
+            except: pass
+        bot.send_message(message.chat.id, "👋 **Welcome Back to Earning Hub Bot!** ✨\n\nNiche diye gaye menu se kamana shuru karein. 👇", reply_markup=get_main_keyboard(), parse_mode="Markdown")
     else:
         markup = types.InlineKeyboardMarkup()
         for idx, ch in enumerate(CHANNELS, 1):
             link = f"https://t.me/{ch.replace('@', '')}"
-            markup.add(types.InlineKeyboardButton(f"Join Channel {idx}", url=link))
+            markup.add(types.InlineKeyboardButton(f"📢 Join Channel {idx}", url=link))
         markup.add(types.InlineKeyboardButton("✅ Joined / Verify", callback_data="verify_channels"))
         
         bot.send_message(
             message.chat.id, 
-            "⚠️ Bot use karne ke liye aapko humare 3 channels join karne honge:\n\n"
+            "⚠️ **MANDATORY VERIFICATION** ⚠️\n\n"
+            "Bot use karne ke liye aapko humare **3 Channels** join karne honge:\n\n"
             f"1️⃣ {CHANNELS[0]}\n2️⃣ {CHANNELS[1]}\n3️⃣ {CHANNELS[2]}\n\n"
-            "Join karne ke baad niche 'Verify' button par click karein.", 
-            reply_markup=markup
+            "👉 Join karne ke baad niche **'Verify'** button par click karein.", 
+            reply_markup=markup,
+            parse_mode="Markdown"
         )
 
 @bot.callback_query_handler(func=lambda call: call.data == "verify_channels")
@@ -89,19 +95,35 @@ def verify_callback(call):
     user_id = call.from_user.id
     if check_membership(user_id):
         bot.answer_callback_query(call.id, "✅ Verification Successful!")
+        
         if user_id in users_db and users_db[user_id]['referred_by'] and not users_db[user_id]['verified']:
             ref = users_db[user_id]['referred_by']
             if ref in users_db:
                 users_db[ref]['spins'] += 1
-                try: bot.send_message(ref, "🎉 Aapke referral ne channel join kar liya! Aapko 1 free spin mila.")
+                try: bot.send_message(ref, "🎉 **Notification:** Aapke referral ne channel join kar liya! Aapko **1 Free Spin** mila. 🎰", parse_mode="Markdown")
                 except: pass
                     
         users_db[user_id]['verified'] = True
         bot.delete_message(call.message.chat.id, call.message.message_id)
-        bot.send_message(call.message.chat.id, "🎉 Aapka verification safal raha! Ab aap kama sakte hain.", reply_markup=get_main_keyboard())
+        
+        # --- CHANGES HERE: Direct Spin option after verification ---
+        spin_now_markup = types.InlineKeyboardMarkup()
+        spin_now_markup.add(types.InlineKeyboardButton("🎰 Spin Now & Earn!", callback_data="spin_trigger"))
+        
+        bot.send_message(
+            call.message.chat.id, 
+            "🥳 **CONGRATULATIONS!** 🥳\n\n"
+            "Aapka verification safal raha! Aapko mila hai **1 Free Spin** 🎁\n\n"
+            "👇 Niche diye gaye button par click karke abhi apna luck try karein!", 
+            reply_markup=spin_now_markup,
+            parse_mode="Markdown"
+        )
+        # Niche ke buttons bhi enable kar diye background mein
+        bot.send_message(call.message.chat.id, "ℹ️ Aap niche diye gaye main keyboard menu ka use bhi kar sakte hain.", reply_markup=get_main_keyboard())
     else:
         bot.answer_callback_query(call.id, "❌ Aapne abhi tak saare channels join nahi kiye hain!", show_alert=True)
 
+# Main script mechanics handler
 @bot.message_handler(func=lambda message: True)
 def handle_menu(message):
     user_id = message.from_user.id
@@ -110,64 +132,135 @@ def handle_menu(message):
         return
 
     if message.text == "🎰 Spin and Win":
-        spins = users_db[user_id]['spins']
-        if spins > 0:
-            win_amount = random.choice([4, 5, 6])
-            users_db[user_id]['balance'] += win_amount
-            users_db[user_id]['spins'] -= 1
-            bot.send_message(message.chat.id, f"🎰 Spin ghum raha hai...\n\n💰 Congratulations! Aapne ₹{win_amount} jeete!\nRemaining Spins: {users_db[user_id]['spins']}")
-        else:
-            bot.send_message(message.chat.id, "❌ Aapke paas spins nahi hain! Friends ko invite karein aur spin kamayein.")
+        run_spin_logic(message.chat.id, user_id)
 
     elif message.text == "💰 Wallet":
-        balance = users_db[user_id]['balance']
-        markup = types.InlineKeyboardMarkup()
-        if balance >= 20:
-            markup.add(types.InlineKeyboardButton("💸 Withdraw Request", callback_data="request_withdraw"))
-        bot.send_message(message.chat.id, f"💳 **Aapka Wallet**\n\n💰 Current Balance: ₹{balance}\n🎰 Available Spins: {users_db[user_id]['spins']}\n\nℹ️ Minimum withdrawal amount ₹20 hai.", parse_mode="Markdown", reply_markup=markup)
+        show_wallet_logic(message.chat.id, user_id)
 
     elif message.text == "👥 Invite Friends":
-        bot_info = bot.get_me()
-        invite_link = f"https://t.me/{bot_info.username}?start={user_id}"
-        bot.send_message(message.chat.id, f"👥 **Refer & Earn Program**\n\nApne dosto ko invite karein aur har referral par **1 Free Spin** paayein!\n\n🔗 Aapka Invite Link:\n`{invite_link}`", parse_mode="Markdown")
+        show_invite_logic(message.chat.id, user_id)
 
-@bot.callback_query_handler(func=lambda call: call.data == "request_withdraw")
-def withdraw_request(call):
-    user_id = call.from_user.id
-    balance = users_db[user_id]['balance']
-    if balance >= 20:
-        admin_markup = types.InlineKeyboardMarkup()
-        admin_markup.add(
-            types.InlineKeyboardButton("✅ Approve & Deduct", callback_data=f"wd_approve_{user_id}_{balance}"),
-            types.InlineKeyboardButton("❌ Reject", callback_data=f"wd_reject_{user_id}")
+# --- REUSABLE CORE LOGIC ---
+def run_spin_logic(chat_id, user_id):
+    spins = users_db[user_id]['spins']
+    if spins > 0:
+        win_amount = random.choice([4, 5, 6])
+        users_db[user_id]['balance'] += win_amount
+        users_db[user_id]['spins'] -= 1
+        
+        bot.send_message(
+            chat_id, 
+            f"🎰 **Lucky Wheel Spin Ho Raha Hai...**\n"
+            f"⚡ *Checking your luck...*\n\n"
+            f"💥 **💥 WINNER! 💥**\n"
+            f"🎁 Congratulations! Aapne **₹{win_amount}** jeete hain!\n\n"
+            f"🎫 Remaining Spins: **{users_db[user_id]['spins']}**",
+            parse_mode="Markdown"
         )
-        bot.send_message(ADMIN_ID, f"🚨 **New Withdrawal Request!**\n\n👤 User: {call.from_user.first_name} (ID: `{user_id}`)\n💰 Amount: ₹{balance}\n\nPaise manually pay karne ke baad niche button dabaayein.", parse_mode="Markdown", reply_markup=admin_markup)
-        bot.answer_callback_query(call.id, "⏳ Withdrawal request admin ko bhej di gayi hai.", show_alert=True)
-        bot.edit_message_text("⏳ Your withdrawal is under review by admin.", call.message.chat.id, call.message.message_id)
     else:
-        bot.answer_callback_query(call.id, "❌ Minimum balance ₹20 hona chahiye.", show_alert=True)
+        bot.send_message(chat_id, "❌ **Oops! Aapke paas spins nahi hain.**\n\n👥 Apne dosto ko invite karein aur har referral par **1 Free Spin** paayein!", parse_mode="Markdown")
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("wd_"))
-def admin_process_withdrawal(call):
-    if call.from_user.id != ADMIN_ID:
-        bot.answer_callback_query(call.id, "⚠️ You are not authorized!", show_alert=True)
-        return
-    action = call.data.split("_")[1]
-    target_user_id = int(call.data.split("_")[2])
+def show_wallet_logic(chat_id, user_id):
+    balance = users_db[user_id]['balance']
+    markup = types.InlineKeyboardMarkup()
+    if balance >= 20:
+        markup.add(types.InlineKeyboardButton("💸 Withdraw Request", callback_data="request_withdraw"))
+        
+    bot.send_message(
+        chat_id, 
+        f"💳 **MY LIVE WALLET** 💳\n\n"
+        f"💵 Current Balance: **₹{balance}**\n"
+        f"🎰 Available Spins: **{users_db[user_id]['spins']}**\n\n"
+        f"⚠️ *Note: Minimum withdrawal amount threshold ₹20 hai.*", 
+        parse_mode="Markdown", 
+        reply_markup=markup
+    )
+
+def show_invite_logic(chat_id, user_id):
+    bot_info = bot.get_me()
+    invite_link = f"https://t.me/{bot_info.username}?start={user_id}"
+    bot.send_message(
+        chat_id, 
+        f"👥 **REFER & EARN PROGRAM** 👥\n\n"
+        f"Apne dosto ko invite karein aur kamaayein unlimited rewards! Har valid referral par aapko milega:\n"
+        f"👉 **1 Free Spin**\n\n"
+        f"🔗 **Aapka Personal Invite Link:**\n`{invite_link}`", 
+        parse_mode="Markdown"
+    )
+
+# Callback inline triggers
+@bot.callback_query_handler(func=lambda call: call.data in ["spin_trigger", "request_withdraw"] or call.data.startswith("wd_"))
+def handle_callbacks(call):
+    user_id = call.from_user.id
     
-    if action == "approve":
-        amount = int(call.data.split("_")[3])
-        if target_user_id in users_db and users_db[target_user_id]['balance'] >= amount:
-            users_db[target_user_id]['balance'] -= amount
-            try: bot.send_message(target_user_id, f"✅ Admin ne aapka ₹{amount} ka withdrawal successfully transfer kar diya hai!")
-            except: pass
-            bot.edit_message_text(f"✅ User `{target_user_id}` ka ₹{amount} ka withdrawal approve aur deduct ho gaya.", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+    if call.data == "spin_trigger":
+        if not check_membership(user_id):
+            bot.answer_callback_query(call.id, "❌ Verification Required!", show_alert=True)
+            return
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+        run_spin_logic(call.message.chat.id, user_id)
+        
+    elif call.data == "request_withdraw":
+        balance = users_db[user_id]['balance']
+        if balance >= 20:
+            msg = bot.send_message(call.message.chat.id, "📩 **⚡ INSTANT WITHDRAWAL** ⚡\n\nApni **UPI ID** enter karein jisme aapko payment chahiye:\n_(Jaise: name@upi ya mobile@oksbi)_", parse_mode="Markdown")
+            bot.register_next_step_handler(msg, process_upi, balance)
+            bot.answer_callback_query(call.id)
         else:
-            bot.edit_message_text("❌ Error: User ke paas ab itna balance nahi hai.", call.message.chat.id, call.message.message_id)
-    elif action == "reject":
-        try: bot.send_message(target_user_id, "❌ Aapki withdrawal request admin dwara reject kar di gayi hai.")
-        except: pass
-        bot.edit_message_text(f"❌ User `{target_user_id}` ki request reject kar di gayi.", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+            bot.answer_callback_query(call.id, "❌ Minimum balance ₹20 hona chahiye.", show_alert=True)
+
+    elif call.data.startswith("wd_"):
+        if call.from_user.id != ADMIN_ID:
+            bot.answer_callback_query(call.id, "⚠️ You are not authorized!", show_alert=True)
+            return
+        action = call.data.split("_")[1]
+        target_user_id = int(call.data.split("_")[2])
+        
+        if action == "approve":
+            amount = int(call.data.split("_")[3])
+            if target_user_id in users_db and users_db[target_user_id]['balance'] >= amount:
+                users_db[target_user_id]['balance'] -= amount
+                try: bot.send_message(target_user_id, f"✅ **PAYMENT SUCCESSFUL** ✅\n\nAdmin ne aapka **₹{amount}** ka withdrawal successfully transfer kar diya hai! Apna bank account check karein. 🎉", parse_mode="Markdown")
+                except: pass
+                bot.edit_message_text(f"✅ User `{target_user_id}` ka ₹{amount} ka withdrawal approve aur deduct ho gaya.", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+            else:
+                bot.edit_message_text("❌ Error: User ke paas ab itna balance nahi hai.", call.message.chat.id, call.message.message_id)
+        elif action == "reject":
+            try: bot.send_message(target_user_id, "❌ **WITHDRAWAL REJECTED** ❌\n\nAapki withdrawal request admin dwara reject kar di gayi hai. Sahi details ke sath fir se try karein.", parse_mode="Markdown")
+            except: pass
+            bot.edit_message_text(f"❌ User `{target_user_id}` ki request reject kar di gayi.", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+
+def process_upi(message, balance):
+    user_id = message.from_user.id
+    upi_id = message.text.strip()
+    
+    if upi_id in ["🎰 Spin and Win", "💰 Wallet", "👥 Invite Friends", "/start"]:
+        bot.send_message(message.chat.id, "❌ **Withdrawal Cancelled.** Sahi UPI ID daalein.")
+        return
+
+    if users_db.get(user_id, {}).get('balance', 0) < balance:
+        bot.send_message(message.chat.id, "❌ **Error:** Balance check karein.")
+        return
+
+    admin_markup = types.InlineKeyboardMarkup()
+    admin_markup.add(
+        types.InlineKeyboardButton("✅ Approve & Deduct", callback_data=f"wd_approve_{user_id}_{balance}"),
+        types.InlineKeyboardButton("❌ Reject", callback_data=f"wd_reject_{user_id}")
+    )
+    
+    bot.send_message(
+        ADMIN_ID, 
+        f"🚨 **NEW WITHDRAWAL REQUEST** 🚨\n\n"
+        f"👤 **User Name:** {message.from_user.first_name}\n"
+        f"🆔 **User ID:** `{user_id}`\n"
+        f"💰 **Amount:** *₹{balance}*\n"
+        f"📱 **UPI ID:** `{upi_id}`\n\n"
+        f"👉 Paise manually pay karne ke baad niche click karein:",
+        parse_mode="Markdown",
+        reply_markup=admin_markup
+    )
+    
+    bot.send_message(message.chat.id, "⏳ **Request Sent!**\n\nAapki withdrawal request successfully Admin ke paas bhej di gayi hai. Sahi verification ke baad paise credit ho jayenge! ✨")
 
 if __name__ == "__main__":
     print("Bot is running...")
